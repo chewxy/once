@@ -1,12 +1,68 @@
 #!/usr/local/bin/python
 
 import os
+import platform
 import sys
 import pickle
 import datetime
 import m2secret
 
+
+SYSTEM = platform.system()
 KEY = "1234567890123456"
+
+if SYSTEM == 'Linux':
+  # check to see if xclip exists
+  if os.system('which xclip') == 0:
+    method = 'xclip'
+
+  # check to see if xsel exists
+  elif os.system('which xsel') == 0:
+    method = 'xsel'
+  
+  else:
+    try:
+      import gtk
+      method = 'gtk'
+    except ImportError:
+      # oops, you don't have any requirements
+      # Linux. Having choices can be a bitch sometimes
+      sys.exit('You need either: xclip (linux), xsel (linux) or pygtk (PyPI) installed')
+
+elif SYSTEM == 'Darwin':
+  method = 'OSX'
+
+
+def xclipMethod(password):
+  f = os.popen('xclip -selection c', 'w')
+  f.write(password)
+  f.close()
+
+
+def xselMethod(password):
+  f = os.popen('xsel -i', 'w')
+  f.write(password)
+  f.close()
+
+
+def gtkMethod(password):
+  f = gtk.Clipboard()
+  f.set_text(password)
+  f.store()
+
+def osXMethod(password):
+  f = os.popen('pbcopy', 'w')
+  f.write(password)
+  f.close()
+
+
+methodsLoopkup = {
+  'OSX': osXMethod,
+  'xclip': xclipMethod,
+  'xsel': xselMethod,
+  'gtk': gtkMethod
+}
+
 
 class Data(object):
   def __init__(self, path):
@@ -14,7 +70,7 @@ class Data(object):
     try:
       self.data = pickle.load(open(self.path))
     except Exception, e:
-      self.data = dict()
+      self.data = {}
 
   def set(self, key, value):
     self.data[key] = value
@@ -22,6 +78,7 @@ class Data(object):
 
   def get(self, key):
     return self.data.get(key)
+
 
   def remove(self, key):
     if key in self.data:
@@ -32,8 +89,9 @@ class Data(object):
     pickle.dump(self.data, open(self.path, 'w'))
 
 class Once(object):
-  def __init__(self):
+  def __init__(self, methods=methodsLoopkup, method=method):
     self.data = Data(os.path.join(os.path.expanduser("~"), ".once"))
+    self.copyToClipboard = methods[method]
 
   def run(self):
     if len(sys.argv) < 2:
@@ -67,23 +125,21 @@ class Once(object):
     # Check date if it is already today
     last_get = self.data.get("last_get")
     format = "%Y-%m-%d"
-    if last_get and last_get.strftime(format) == now.strftime(format):
+    if last_get and (now - last_get < datetime.timedelta(hours=24)):
       print "You already asked for your password once."
       return
-
-    # Set the new date if we're cool
-    self.data.set("last_get", now)
 
     # Decode
     secret = m2secret.Secret()
     secret.deserialize(data)
     password = secret.decrypt(KEY)
 
-    # Copy to clipboard
-    cmd = 'echo %s | tr -d "\n" | pbcopy' % password
-    os.system(cmd)
+    self.copyToClipboard(password)
+    print "Password has been copied to clipboard"
 
-    print "Copied '%s' to clipboard." % (password)
+    # Set the new date if we're cool
+    self.data.set("last_get", now)
+    sys.exit(0)
 
   def usage(self):
     print "Usage: once get"
